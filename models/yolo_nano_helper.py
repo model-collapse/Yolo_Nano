@@ -97,7 +97,7 @@ class FCA(nn.Module):
         super(FCA, self).__init__()
         self.channels = channels
 
-
+        #self.avg_pool = nn.AvgPool2d((52, 52))
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
             nn.Linear(channels, reduce_channels, bias=False),
@@ -110,7 +110,13 @@ class FCA(nn.Module):
         b, c, _, _ = x.size()
         out = self.avg_pool(x).view(b, c)
         out = self.fc(out).view(b, c, 1, 1)
-        out = x * out.expand_as(x)
+        bb = b.cpu().numpy()
+        cc = c.cpu().numpy()
+        
+        if bb > 1:
+            out = x * out.expand_as(x)
+        elif bb == 1:
+            out = x * out
         return out
 
 
@@ -140,7 +146,7 @@ class YoloNano(nn.Module):
     each channel in here is only 75. for voc 2007 because: (num_class+5)*anchor because voc has 20 classes include background so the
     channel in here is 75
     '''
-    def __init__(self,num_class = 20,num_anchor = 3,img_size = 416):
+    def __init__(self,num_class = 20,num_anchor = 3,img_size = 416, to_onnx = False):
         __FUNC = {
             'EP': EP,
             'PEP': PEP,
@@ -152,6 +158,7 @@ class YoloNano(nn.Module):
         self.img_size = img_size
         self.out_channel = (num_class+5)*num_anchor
         self.seen = 0
+        self.to_onnx = to_onnx
 
         self.layer0 = nn.Sequential(conv3x3(3,12,1),conv3x3(12,24,2))
         self.layer1 = nn.Sequential(PEP(24,7,24),
@@ -223,18 +230,25 @@ class YoloNano(nn.Module):
         x_2 = self.layer3(x_1)
         x_3 = self.layer4(x_2)
         x = self.compress(x_3)
-        x = F.interpolate(x,scale_factor=2,mode = 'bilinear',align_corners=True)
+        print("shape x1 = ", x_1.shape)
+        print("shape x2 = ", x_2.shape)
+        print("shape x3 = ", x_3.shape)
+        print("shape x = ", x.shape)
+        x = F.interpolate(x,size=(13,13),mode = 'bilinear',align_corners=False)
 
         x = torch.cat([x,x_2],dim=1)
         x_4 = self.layer5(x)
         x = self.compress2(x_4)
-        x = F.interpolate(x,scale_factor=2,mode = 'bilinear',align_corners=True)
+        print("xshpe h2 = ", x.shape)
+        x = F.interpolate(x,size=(26,26),mode = 'bilinear',align_corners=False)
         x = torch.cat([x,x_1],dim=1)
 
         x_scale_4 = self.scale_4(x)
         x_scale_2 = self.scale_2(x_4)
         x_scale_1 = self.scale_1(x_3)
 
+        if self.to_onnx:
+            return [x_scale_1, x_scale_2, x_scale_4]
 
         layer_0_x, layer_loss = self.yolo0(x_scale_1,targets,img_dim,img_scores = img_scores,gt_mix_index=gt_mix_index)
         loss += layer_loss
